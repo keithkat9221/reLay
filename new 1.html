@@ -90,43 +90,42 @@ void setRelay(int relayPin, int eepromAddr, bool state) {
 }
 
 void handleEvent(AceButton* button, uint8_t eventType, uint8_t) {
-  int pin = button->getPin();
-  bool newState = false;
+int pin = button->getPin();
+bool newState = false;
+if (useLatchedSwitch) {
+newState = (eventType == AceButton::kEventPressed);
+} else {
+if (eventType != AceButton::kEventReleased) return;
+switch (pin) {
+case SwitchPin1: newState = !(digitalRead(RELAY1) == LOW); break;
+case SwitchPin2: newState = !(digitalRead(RELAY2) == LOW); break;
+case SwitchPin3: newState = !(digitalRead(RELAY3) == LOW); break;
+case SwitchPin4: newState = !(digitalRead(RELAY4) == LOW); break;
+}
+}
+switch (pin) {
+case SwitchPin1:
+setRelay(RELAY1, RELAY1_ADDR, newState);
+if (Firebase.ready()) Firebase.RTDB.setBool(&fbdo, "/relay1", newState);
+Serial.println("Relay1 toggled manually");
+break;
+case SwitchPin2:
+setRelay(RELAY2, RELAY2_ADDR, newState);
+if (Firebase.ready()) Firebase.RTDB.setBool(&fbdo, "/relay2", newState);
+Serial.println("Relay2 toggled manually");
 
-  if (useLatchedSwitch) {
-    newState = (eventType == AceButton::kEventPressed);
-  } else {
-    if (eventType != AceButton::kEventReleased) return;
-    switch (pin) {
-      case SwitchPin1: newState = !(digitalRead(RELAY1) == LOW); break;
-      case SwitchPin2: newState = !(digitalRead(RELAY2) == LOW); break;
-      case SwitchPin3: newState = !(digitalRead(RELAY3) == LOW); break;
-      case SwitchPin4: newState = !(digitalRead(RELAY4) == LOW); break;
-    }
-  }
-
-  switch (pin) {
-    case SwitchPin1:
-      setRelay(RELAY1, RELAY1_ADDR, newState);
-      if (Firebase.ready()) Firebase.RTDB.setBool(&fbdo, "/relay1", newState);
-      Serial.println("Relay1 toggled manually");
-      break;
-    case SwitchPin2:
-      setRelay(RELAY2, RELAY2_ADDR, newState);
-      if (Firebase.ready()) Firebase.RTDB.setBool(&fbdo, "/relay2", newState);
-      Serial.println("Relay2 toggled manually");
-      break;
-    case SwitchPin3:
-      setRelay(RELAY3, RELAY3_ADDR, newState);
-      if (Firebase.ready()) Firebase.RTDB.setBool(&fbdo, "/relay3", newState);
-      Serial.println("Relay3 toggled manually");
-      break;
-    case SwitchPin4:
-      setRelay(RELAY4, RELAY4_ADDR, newState);
-      if (Firebase.ready()) Firebase.RTDB.setBool(&fbdo, "/relay4", newState);
-      Serial.println("Relay4 toggled manually");
-      break;
-  }
+break;
+case SwitchPin3:
+setRelay(RELAY3, RELAY3_ADDR, newState);
+if (Firebase.ready()) Firebase.RTDB.setBool(&fbdo, "/relay3", newState);
+Serial.println("Relay3 toggled manually");
+break;
+case SwitchPin4:
+setRelay(RELAY4, RELAY4_ADDR, newState);
+if (Firebase.ready()) Firebase.RTDB.setBool(&fbdo, "/relay4", newState);
+Serial.println("Relay4 toggled manually");
+break;
+}
 }
 
 void waitForWiFi() {
@@ -209,7 +208,6 @@ void setup() {
   Serial.println("\nFirebase connected successfully.");
   firebaseInitialized = true;
 }
-
 void loop() {
   bool wifiConnected = WiFi.status() == WL_CONNECTED;
   digitalWrite(wifiLed, wifiConnected ? LOW : HIGH);
