@@ -1,0 +1,262 @@
+/**********************************************************************************
+ *  TITLE: Firebase Web-UI + Manual Switch/Button control 4 Relays using ESP8266 NodeMCU with Real time feedback & EEPROM
+ *  
+ *  Preferences--> Aditional boards Manager URLs : 
+ *  https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_dev_index.json, http://arduino.esp8266.com/stable/package_esp8266com_index.json
+ *  
+ *  Download Board ESP8266 (3.1.2) : https://github.com/esp8266/Arduino
+ *  
+ *  Download the libraries: 
+ *  AceButton Library (1.10.1): https://github.com/bxparks/AceButton
+ *  Firebase Arduino Client Library for by Mobizt (4.4.17): https://github.com/mobizt/Firebase-ESP-Client
+ *  ArduinoJson (7.4.1) : https://arduinojson.org/?utm_source=meta&utm_medium=library.properties
+ *  
+ *  Please Install all the dependency related to these libraries. 
+
+ **********************************************************************************/
+
+#include <ESP8266WiFi.h>
+#include <Firebase_ESP_Client.h>
+#include <AceButton.h>
+#include <EEPROM.h>
+using namespace ace_button;
+
+// Wi-Fi credentials
+const char* ssid = "TOP CIT Rm. 304";
+const char* password = "Maximusweb";
+
+// Firebase credentials
+#define API_KEY "AIzaSyBwOX0ZCUTQaQXZw9Pf6qWd2RUCKKSuLvc"
+#define DATABASE_URL "https://relay-nodemcu-1b626-default-rtdb.asia-southeast1.firebasedatabase.app/"
+#define USER_EMAIL "kitjuswa@gmail.com"
+#define USER_PASSWORD "0hfa03mt"
+
+// ==== Feature Flags ====
+bool useEEPROM = true;        // Enable EEPROM memory restore (true = Active)
+bool useLatchedSwitch = true; // true = latched switch, false = push button    
+
+bool firebaseInitialized = false;
+bool firebaseWasReady = false;
+
+// ==== GPIOs ====
+#define RELAY1 5   //D1
+#define RELAY2 4  //D2
+#define RELAY3 14 //D5
+#define RELAY4 12 //D6
+
+#define SwitchPin1 10  //SD3
+#define SwitchPin2 0  //D3 (Should not connect with GND during booting)
+#define SwitchPin3 13 //D7
+#define SwitchPin4 3  //RX
+
+#define wifiLed 16 
+
+// ==== Firebase and Button Setup ====
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+
+ButtonConfig config1;
+ButtonConfig config2;
+ButtonConfig config3;
+ButtonConfig config4;
+
+AceButton button1(&config1, SwitchPin1);
+AceButton button2(&config2, SwitchPin2);
+AceButton button3(&config3, SwitchPin3);
+AceButton button4(&config4, SwitchPin4);
+
+// ==== EEPROM Addresses ====
+#define EEPROM_SIZE 10
+#define RELAY1_ADDR 0
+#define RELAY2_ADDR 1
+#define RELAY3_ADDR 2
+#define RELAY4_ADDR 3
+
+void writeRelayStateToEEPROM(uint8_t addr, bool state) {
+  if (useEEPROM) {
+    EEPROM.write(addr, state ? 1 : 0);
+    EEPROM.commit();
+  }
+}
+
+bool readRelayStateFromEEPROM(uint8_t addr) {
+  return EEPROM.read(addr) == 1;
+}
+
+void setRelay(int relayPin, int eepromAddr, bool state) {
+  digitalWrite(relayPin, state ? LOW : HIGH);  // Active LOW
+  writeRelayStateToEEPROM(eepromAddr, state);
+}
+
+void handleEvent(AceButton* button, uint8_t eventType, uint8_t) {
+  int pin = button->getPin();
+  bool newState = false;
+
+  if (useLatchedSwitch) {
+    newState = (eventType == AceButton::kEventPressed);
+  } else {
+    if (eventType != AceButton::kEventReleased) return;
+    switch (pin) {
+      case SwitchPin1: newState = !(digitalRead(RELAY1) == LOW); break;
+      case SwitchPin2: newState = !(digitalRead(RELAY2) == LOW); break;
+      case SwitchPin3: newState = !(digitalRead(RELAY3) == LOW); break;
+      case SwitchPin4: newState = !(digitalRead(RELAY4) == LOW); break;
+    }
+  }
+
+  switch (pin) {
+    case SwitchPin1:
+      setRelay(RELAY1, RELAY1_ADDR, newState);
+      if (Firebase.ready()) Firebase.RTDB.setBool(&fbdo, "/relay1", newState);
+      Serial.println("Relay1 toggled manually");
+      break;
+    case SwitchPin2:
+      setRelay(RELAY2, RELAY2_ADDR, newState);
+      if (Firebase.ready()) Firebase.RTDB.setBool(&fbdo, "/relay2", newState);
+      Serial.println("Relay2 toggled manually");
+      break;
+    case SwitchPin3:
+      setRelay(RELAY3, RELAY3_ADDR, newState);
+      if (Firebase.ready()) Firebase.RTDB.setBool(&fbdo, "/relay3", newState);
+      Serial.println("Relay3 toggled manually");
+      break;
+    case SwitchPin4:
+      setRelay(RELAY4, RELAY4_ADDR, newState);
+      if (Firebase.ready()) Firebase.RTDB.setBool(&fbdo, "/relay4", newState);
+      Serial.println("Relay4 toggled manually");
+      break;
+  }
+}
+
+void waitForWiFi() {
+  Serial.print("Connecting to Wi-Fi");
+  WiFi.begin(ssid, password);
+  unsigned long startAttemptTime = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    if (millis() - startAttemptTime > 10000) {
+      Serial.println("\nWi-Fi connection failed. Restarting...");
+      delay(1000);
+      ESP.restart();
+    }
+    delay(200);
+    Serial.print(".");
+  }
+  Serial.println("\nWi-Fi connected successfully");
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  if (useEEPROM) EEPROM.begin(EEPROM_SIZE);
+
+  pinMode(RELAY1, OUTPUT);
+  pinMode(RELAY2, OUTPUT);
+  pinMode(RELAY3, OUTPUT);
+  pinMode(RELAY4, OUTPUT);
+
+  if (useEEPROM) {
+    setRelay(RELAY1, RELAY1_ADDR, readRelayStateFromEEPROM(RELAY1_ADDR));
+    setRelay(RELAY2, RELAY2_ADDR, readRelayStateFromEEPROM(RELAY2_ADDR));
+    setRelay(RELAY3, RELAY3_ADDR, readRelayStateFromEEPROM(RELAY3_ADDR));
+    setRelay(RELAY4, RELAY4_ADDR, readRelayStateFromEEPROM(RELAY4_ADDR));
+  } else {
+    digitalWrite(RELAY1, HIGH);
+    digitalWrite(RELAY2, HIGH);
+    digitalWrite(RELAY3, HIGH);
+    digitalWrite(RELAY4, HIGH);
+  }
+
+  pinMode(SwitchPin1, INPUT_PULLUP);
+  pinMode(SwitchPin2, INPUT_PULLUP);
+  pinMode(SwitchPin3, INPUT_PULLUP);
+  pinMode(SwitchPin4, INPUT_PULLUP);
+
+  pinMode(wifiLed, OUTPUT);
+  digitalWrite(wifiLed, HIGH);
+
+  waitForWiFi();
+  digitalWrite(wifiLed, LOW);
+
+  // Setup buttons
+  button1.getButtonConfig()->setEventHandler(handleEvent);
+  button2.getButtonConfig()->setEventHandler(handleEvent);
+  button3.getButtonConfig()->setEventHandler(handleEvent);
+  button4.getButtonConfig()->setEventHandler(handleEvent);
+
+  // === Initialize Firebase with Timeout and Restart ===
+  Serial.println("Initializing Firebase...");
+
+  config.api_key = API_KEY;
+  auth.user.email = USER_EMAIL;
+  auth.user.password = USER_PASSWORD;
+  config.database_url = DATABASE_URL;
+
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
+
+  unsigned long timeout = millis() + 10000;
+  while (!Firebase.ready()) {
+    if (millis() > timeout) {
+      Serial.println("Firebase failed to connect in 10s. Restarting ESP...");
+      delay(1000);
+      ESP.restart();
+    }
+    delay(200);
+    Serial.print(".");
+  }
+
+  Serial.println("\nFirebase connected successfully.");
+  firebaseInitialized = true;
+}
+
+void loop() {
+  bool wifiConnected = WiFi.status() == WL_CONNECTED;
+  digitalWrite(wifiLed, wifiConnected ? LOW : HIGH);
+
+  bool firebaseNowReady = Firebase.ready();
+
+  if (firebaseNowReady && !firebaseWasReady) {
+    Serial.println("Firebase first-time ready. Pushing EEPROM state → Firebase");
+    firebaseWasReady = true;
+
+    if (useEEPROM) {
+      Firebase.RTDB.setBool(&fbdo, "/relay1", readRelayStateFromEEPROM(RELAY1_ADDR));
+      Firebase.RTDB.setBool(&fbdo, "/relay2", readRelayStateFromEEPROM(RELAY2_ADDR));
+      Firebase.RTDB.setBool(&fbdo, "/relay3", readRelayStateFromEEPROM(RELAY3_ADDR));
+      Firebase.RTDB.setBool(&fbdo, "/relay4", readRelayStateFromEEPROM(RELAY4_ADDR));
+    }
+
+    return;
+  }
+
+  if (firebaseNowReady) {
+    if (Firebase.RTDB.getBool(&fbdo, "/relay1")) {
+      setRelay(RELAY1, RELAY1_ADDR, fbdo.boolData());
+    }
+    if (Firebase.RTDB.getBool(&fbdo, "/relay2")) {
+      setRelay(RELAY2, RELAY2_ADDR, fbdo.boolData());
+    }
+    if (Firebase.RTDB.getBool(&fbdo, "/relay3")) {
+      setRelay(RELAY3, RELAY3_ADDR, fbdo.boolData());
+    }
+    if (Firebase.RTDB.getBool(&fbdo, "/relay4")) {
+      setRelay(RELAY4, RELAY4_ADDR, fbdo.boolData());
+    }
+  }
+
+  {
+  "rules": {
+    ".read": "auth != null",
+    ".write": "auth != null"
+  }
+}
+
+  // Manual control check
+  button1.check();
+  button2.check();
+  button3.check();
+  button4.check();
+
+  delay(10);
+}
